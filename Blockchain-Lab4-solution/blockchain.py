@@ -50,66 +50,70 @@ def validate_transaction(transaction: str) -> Union[dict, TransactionValidationE
     try:
         tx = json.loads(transaction)
     except json.JSONDecodeError:
+        print(f"[TX] Received an invalid transaction, invalid JSON - {transaction}")
         return TransactionValidationError.INVALID_JSON
 
-    # 访问 payload 数据
     payload = tx.get('payload', {})
 
     if not (payload.get('sender') and isinstance(payload['sender'], str) and sender_valid.search(payload['sender'])):
+        print(f"[TX] Received an invalid transaction, wrong sender - {payload}")
         return TransactionValidationError.INVALID_SENDER
 
     if not (payload.get('message') and isinstance(payload['message'], str) and len(payload['message']) <= 70 and
             payload['message'].isalnum()):
+        print(f"[TX] Received an invalid transaction, wrong message - {payload}")
         return TransactionValidationError.INVALID_MESSAGE
 
-    # 将 sender 用于创建公钥对象
     try:
         public_key = ed25519.Ed25519PublicKey.from_public_bytes(bytes.fromhex(payload['sender']))
     except ValueError:
+        print(f"[TX] Received an invalid transaction, wrong sender - {payload}")
         return TransactionValidationError.INVALID_SENDER
 
     if not (payload.get('signature') and isinstance(payload['signature'], str) and signature_valid.search(
             payload['signature'])):
+        print(f"[TX] Received an invalid transaction, wrong signature - {payload}")
         return TransactionValidationError.INVALID_SIGNATURE
 
     try:
-        # 确保传递正确的数据给验证函数
         public_key.verify(bytes.fromhex(payload['signature']), transaction_bytes(payload))
     except InvalidSignature:
+        print(f"[TX] Received an invalid transaction, wrong signature - {payload}")
         return TransactionValidationError.INVALID_SIGNATURE
+    return tx
 
-    return tx  # 返回验证通过的交易
-
-def block_validate_transaction(transaction: dict) -> dict | TransactionValidationError:
+def block_validate_transaction(transaction: dict) -> Union[dict, TransactionValidationError]:
     tx = transaction
 
     # 访问 payload 数据
     payload = tx.get('payload', {})
 
     if not (payload.get('sender') and isinstance(payload['sender'], str) and sender_valid.search(payload['sender'])):
+        print(f"[TX] Received an invalid transaction, wrong sender - {payload}")
         return TransactionValidationError.INVALID_SENDER
 
     if not (payload.get('message') and isinstance(payload['message'], str) and len(payload['message']) <= 70 and
             payload['message'].isalnum()):
+        print(f"[TX] Received an invalid transaction, wrong message - {payload}")
         return TransactionValidationError.INVALID_MESSAGE
 
-    # 将 sender 用于创建公钥对象
     try:
         public_key = ed25519.Ed25519PublicKey.from_public_bytes(bytes.fromhex(payload['sender']))
     except ValueError:
+        print(f"[TX] Received an invalid transaction, wrong sender - {payload}")
         return TransactionValidationError.INVALID_SENDER
 
     if not (payload.get('signature') and isinstance(payload['signature'], str) and signature_valid.search(
             payload['signature'])):
+        print(f"[TX] Received an invalid transaction, wrong signature - {payload}")
         return TransactionValidationError.INVALID_SIGNATURE
 
     try:
-        # 确保传递正确的数据给验证函数
         public_key.verify(bytes.fromhex(payload['signature']), transaction_bytes(payload))
     except InvalidSignature:
+        print(f"[TX] Received an invalid transaction, wrong signature - {payload}")
         return TransactionValidationError.INVALID_SIGNATURE
-
-    return tx  # 返回验证通过的交易
+    return tx
 
 class Blockchain():
     def __init__(self):
@@ -167,7 +171,7 @@ class Blockchain():
         transaction = json.loads(transaction_str)
         sender = transaction['payload']['sender']
         if transaction['payload']['nonce'] != self.get_current_nonce(sender):
-            print(f"Invalid nonce for transaction: {transaction}")
+            print(f"[TX] Received an invalid transaction, wrong nonce - {transaction}")
             return False
         # Additional validation checks
         return True

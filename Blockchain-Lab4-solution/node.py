@@ -27,7 +27,7 @@ class MyTCPServer(socketserver.ThreadingTCPServer):
 
     def create_and_broadcast_block(self):
         new_block = self.blockchain.last_block()
-        block_data = json.dumps({'type': 'pre-prepare', 'block': new_block}).encode('utf-8')
+        block_data = json.dumps({'type': 'pre-prepare', 'block': new_block, 'sender': self.server_address}).encode('utf-8')
         self.broadcast(block_data)
 
     def broadcast(self, message):
@@ -36,15 +36,24 @@ class MyTCPServer(socketserver.ThreadingTCPServer):
             t = threading.Thread(target=self.send_message, args=(message, node))
             t.start()
 
-    def send_message(self, message, node):
+    def send_message(self, message, node, retry_attempts=3, retry_delay=5):
         host, port = node
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.connect((host, port))
-                send_prefixed(sock, message)
-                print(f"Message sent to {host}:{port}")
-        except Exception as e:
-            print(f"Failed to send message to {host}:{port}: {e}")
+        for attempt in range(retry_attempts):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(5)
+                    sock.connect((host, port))
+                    send_prefixed(sock, message)
+                    print(f"Message sent to {host}:{port}")
+                    return
+            except socket.timeout:
+                print(f"Connection to {host}:{port} timed out on attempt {attempt + 1}/{retry_attempts}. Retrying...")
+            except Exception as e:
+                print(f"Failed to send message to {host}:{port} on attempt {attempt + 1}/{retry_attempts}: {e}")
+
+            time.sleep(retry_delay)
+
+        print(f"Failed to send message to {host}:{port} after {retry_attempts} attempts. Giving up.")
 
 
 class MyTCPHandler(socketserver.BaseRequestHandler):
@@ -57,7 +66,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
             except Exception as e:
                 # print(f"Error handling message: {e}")
                 break
-            print(f"Received from {format(self.client_address[0])}:\n{data}")
+            print(f"Received a transaction from node: {format(self.client_address[0])}:\n{data}")
             data_load = json.loads(data)
             request_type = data_load['type']
             with self.server.blockchain_lock:
@@ -66,16 +75,14 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                     print("Transaction Request.")
                     added = self.server.blockchain.add_transaction(data)
                     # before added,validate nonce, validate other things.
-                    # 1.构造区块提案
                     if added:
-                        # 2.发送区块提案
+                        print(f"[MEM] Stored transaction in the transaction pool: {data_load['signature']}")
                         if len(self.server.blockchain.pool) >= 3:
                             new_block_created = self.server.blockchain.new_block(
                                 self.server.blockchain.last_block()['current_hash'])
                             if new_block_created:
                                 self.server.create_and_broadcast_block()
-                                # 3.接收和处理响应
-                                # 4.处理共识和更新区块链
+                                print("[PROPOSAL] Created a block proposal:", new_block_created)
                                 print("**************************")
                     print("**************************")
                     send_prefixed(self.request, json.dumps({'response': added}).encode())
@@ -88,13 +95,16 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                     send_prefixed(self.request, json.dumps({'response': response}).encode())
                     print("**************************")
                 elif request_type == 'pre-prepare':
-                    self.handle_pre_prepare(data_load['block'])
+                    self.handle_pre_prepare(data_load)
                 elif request_type == 'prepare':
                     self.handle_prepare(data_load)
+                    print(
+                        f"[BLOCK] Received a block request from node {self.server.server_address[0]}:{self.server.server_address[1]}: {data_load}")
                 elif request_type == 'commit':
                     self.handle_commit(data_load)
                 else:
                     print("error: invalid request type.")
+
 
     def handle_block_request(self, payload):
         block_index = int(payload)  # Payload is the index of the block requested
@@ -106,13 +116,6 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         # Fetch the block
         block = self.server.blockchain.blockchain[block_index]
         print(f"The block {block_index} is : {block}")
-        # Prepare the block data
-        # block_data = {
-        #     'index': block_index,
-        #     'transactions': block['payload'],
-        #     'previous_hash': block['previous_hash'],
-        #     'current_hash': self.calculate_block_hash(block)
-        # }
         return block
 
     def calculate_block_hash(self, block):
@@ -124,13 +127,14 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         }, sort_keys=True).encode('utf-8')
         return hashlib.sha256(block_string).hexdigest()
 
-    def handle_pre_prepare(self, block):
+    def handle_pre_prepare(self, message):
+        block = message['block']
+        sender = message['sender']
         if self.validate_block(block):
-            # Assume block is valid
             block_hash = self.calculate_block_hash(block)
             self.server.prepares[block_hash] = set()
-            self.broadcast_prepare(block)
-            print("broadcast prepared.........")
+            self.server.send_message(json.dumps({'type': 'prepare', 'block': block, 'sender': self.server.server_address}).encode('utf-8'), (sender.split(':')[0], int(sender.split(':')[1])))
+            print("Prepare message sent to sender.........")
         else:
             print("Block validation failed.")
 
@@ -141,6 +145,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
             'utf-8')
         print("preparing message......")
         self.server.broadcast(prepare_msg)
+
 
     def handle_prepare(self, message):
         block_hash = self.calculate_block_hash(message['block'])
@@ -156,6 +161,8 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         # Check if the prepares reach 2/3 of the nodes
         if len(self.server.prepares[block_hash]) > len(self.server.nodes) * 2 / 3:
             self.broadcast_commit(message['block'])
+        else:
+            print("Not validate")
 
     def broadcast_commit(self, block):
         commit_msg = json.dumps({'type': 'commit',
@@ -163,6 +170,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                                  'sender': f"{self.server.server_address[0]}:{self.server.server_address[1]}"}).encode(
             'utf-8')
         self.server.broadcast(commit_msg)
+
 
     def handle_commit(self, message):
         block_hash = self.calculate_block_hash(message['block'])
@@ -174,19 +182,25 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
 
         if len(self.server.commits[block_hash]) > len(self.server.nodes) * 2 / 3:
             self.add_block_to_chain(message['block'])
+        else:
+            print("Not validate")
 
     def add_block_to_chain(self, block):
         # Logic to add the block to the blockchain
         self.server.blockchain.blockchain.append(block)
         print("Block added to the blockchain.")
+        print(f"[CONSENSUS] Appended to the blockchain: {block.current_hash}")
 
     def validate_block(self, block: dict):
         for tx in block['transactions']:
             if not block_validate_transaction(tx):
+                print("transaction validation fail")
                 return False
         if block['index'] != self.server.blockchain.last_block()['index'] + 1:
+            print("block index fail")
             return False
         if self.server.blockchain.last_block()['current_hash'] != block['previous_hash']:
+            print("hash validation fail")
             return False
         return True
 
@@ -196,91 +210,45 @@ def server_threading(HOST, port, nodes):
     server.serve_forever()
 
 
-# def client_threading(host_other, port_other):
-#     try:
-#         while True:
-#             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-#                 try:
-#                     sock.connect((host_other, port_other))
-#                 except socket.error as e:
-#                     print(f"Failed to connect to {host_other}:{port_other}, error: {e}")
-#                     time.sleep(10)  # Wait before retrying to connect
-#                     continue
-#
-#                 while True:
-#                     classifier = input("Enter '0' for transaction request, '1' for block request: ")
-#                     if classifier in ['0', '1']:
-#                         break
-#                     print("Invalid input, please enter '0' or '1'.")
-#
-#                 sender, message, nonce, signature, index = generate_message()
-#
-#                 transaction = None  # Initialize to None
-#                 if classifier == '0':
-#                     transaction = make_transaction_request(sender, message, nonce, signature)
-#                 elif classifier == '1':
-#                     transaction = make_block_request(index)
-#
-#                 if transaction:
-#                     send_prefixed(sock, transaction.encode())
-#                     try:
-#                         response = recv_prefixed(sock).decode()
-#                         print("Received from other node:", response)
-#                     except Exception as e:
-#                         print(f"Error receiving data: {e}")
-#                 else:
-#                     print("No valid transaction was generated.")
-#
-#             time.sleep(10)  # Wait for 10 seconds before sending the next request
-#
-#     except Exception as e:
-#         print(f"Error in client operations: {e}")
-def client_threading(nodes):
+def client_threading(host_other, port_other):
     try:
         while True:
-            for host_other, port_other in nodes:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                        try:
-                            sock.connect((host_other, port_other))
-                            print(f"Connected to {host_other}:{port_other}")
-                        except socket.error as e:
-                            print(f"Failed to connect to {host_other}:{port_other}, error: {e}")
-                            time.sleep(10)  # Wait before retrying to connect
-                            continue
+                    sock.connect((host_other, port_other))
+                except socket.error as e:
+                    print(f"Failed to connect to {host_other}:{port_other}, error: {e}")
+                    time.sleep(10)  # Wait before retrying to connect
+                    continue
 
-                        while True:
-                            classifier = input("Enter '0' for transaction request, '1' for block request: ")
-                            if classifier in ['0', '1']:
-                                break
-                            print("Invalid input, please enter '0' or '1'.")
+                while True:
+                    classifier = input("Enter '0' for transaction request, '1' for block request: ")
+                    if classifier in ['0', '1']:
+                        break
+                    print("Invalid input, please enter '0' or '1'.")
 
-                        sender, message, nonce, signature, index = generate_message()
+                sender, message, nonce, signature, index = generate_message()
 
-                        transaction = None  # Initialize to None
-                        if classifier == '0':
-                            transaction = make_transaction_request(sender, message, nonce, signature)
-                        elif classifier == '1':
-                            transaction = make_block_request(index)
+                transaction = None  # Initialize to None
+                if classifier == '0':
+                    transaction = make_transaction_request(sender, message, nonce, signature)
+                elif classifier == '1':
+                    transaction = make_block_request(index)
 
-                        if transaction:
-                            send_prefixed(sock, transaction.encode())
-                            try:
-                                response = recv_prefixed(sock).decode()
-                                print("Received from other node:", response)
-                            except Exception as e:
-                                print(f"Error receiving data: {e}")
-                        else:
-                            print("No valid transaction was generated.")
+                if transaction:
+                    send_prefixed(sock, transaction.encode())
+                    try:
+                        response = recv_prefixed(sock).decode()
+                        print("Received from other node:", response)
+                    except Exception as e:
+                        print(f"Error receiving data: {e}")
+                else:
+                    print("No valid transaction was generated.")
 
-                except Exception as e:
-                    print(f"Error in client operations: {e}")
-
-                time.sleep(10)  # Wait for 10 seconds before sending the next request
+            time.sleep(10)  # Wait for 10 seconds before sending the next request
 
     except Exception as e:
         print(f"Error in client operations: {e}")
-
 
 def generate_message():
     private_key = ed25519.Ed25519PrivateKey.generate()
@@ -299,9 +267,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     port: int = args.port
     node_list: str = args.node_list
-    HOST = '10.16.85.229'  # localhost
-    host_other = 'localhost'  # change----->'local host'
-    port_other = 8000  # change--------->8000
+    HOST = '192.168.1.106'  # localhost
+    host_other = '192.168.1.105'  # change----->'local host'
+    port_other = 8001  # change--------->8000
     nodes = []
     try:
         with open(node_list, 'r') as file:
@@ -323,11 +291,11 @@ if __name__ == '__main__':
     try:
         server_thread = threading.Thread(target=server_threading, args=(HOST, port, nodes))
         server_thread.start()
-        #client_thread = threading.Thread(target=client_threading, args=(nodes,))
-        #client_thread.start()
+        client_thread = threading.Thread(target=client_threading, args=(host_other, port_other))  # nodes,
+        client_thread.start()
         print(f"Server started on {HOST}:{port}. Press Ctrl+C to stop.")
         server_thread.join()
-        #client_thread.join()
+        client_thread.join()
     except KeyboardInterrupt:
         print("\nServer shutting down...")
     except Exception as e:
