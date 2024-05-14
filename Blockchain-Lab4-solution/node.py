@@ -27,7 +27,7 @@ class MyTCPServer(socketserver.ThreadingTCPServer):
 
     def create_and_broadcast_block(self):
         new_block = self.blockchain.last_block()
-        block_data = json.dumps({'type': 'pre-prepare', 'block': new_block, 'sender': self.server_address}).encode('utf-8')
+        block_data = json.dumps({'type': 'pre-prepare', 'block': new_block, 'sender': f"{self.server_address[0]}:{self.server_address[1]}"}).encode('utf-8')
         self.broadcast(block_data)
 
     def broadcast(self, message):
@@ -73,10 +73,11 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                 if request_type == "transaction":
                     print("**************************")
                     print("Transaction Request.")
+                    payload = data_load['payload']
                     added = self.server.blockchain.add_transaction(data)
                     # before added,validate nonce, validate other things.
                     if added:
-                        print(f"[MEM] Stored transaction in the transaction pool: {data_load['signature']}")
+                        print(f"[MEM] Stored transaction in the transaction pool: {payload['signature']}")
                         if len(self.server.blockchain.pool) >= 3:
                             new_block_created = self.server.blockchain.new_block(
                                 self.server.blockchain.last_block()['current_hash'])
@@ -133,8 +134,8 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         if self.validate_block(block):
             block_hash = self.calculate_block_hash(block)
             self.server.prepares[block_hash] = set()
-            self.server.send_message(json.dumps({'type': 'prepare', 'block': block, 'sender': self.server.server_address}).encode('utf-8'), (sender.split(':')[0], int(sender.split(':')[1])))
-            print("Prepare message sent to sender.........")
+            self.broadcast_prepare(block)
+            print("Prepare message broadcast to all nodes")
         else:
             print("Block validation failed.")
 
