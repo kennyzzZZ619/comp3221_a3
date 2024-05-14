@@ -66,13 +66,13 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
             except Exception as e:
                 # print(f"Error handling message: {e}")
                 break
-            print(f"Received a transaction from node: {format(self.client_address[0])}:\n{data}")
             data_load = json.loads(data)
             request_type = data_load['type']
             with self.server.blockchain_lock:
                 if request_type == "transaction":
                     print("**************************")
                     print("Transaction Request.")
+                    print(f"Received a transaction from node: {format(self.client_address[0])}:\n{data}")
                     payload = data_load['payload']
                     added = self.server.blockchain.add_transaction(data)
                     # before added,validate nonce, validate other things.
@@ -97,12 +97,16 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
                     print("**************************")
                 elif request_type == 'pre-prepare':
                     self.handle_pre_prepare(data_load)
+                    print(
+                        f"[BLOCK] Received a block request pre-prepare from node {data_load['sender']}: {data_load}")
                 elif request_type == 'prepare':
                     self.handle_prepare(data_load)
                     print(
-                        f"[BLOCK] Received a block request from node {self.server.server_address[0]}:{self.server.server_address[1]}: {data_load}")
+                        f"[BLOCK] Received a block prepare request from node {data_load['sender']}: {data_load}")
                 elif request_type == 'commit':
                     self.handle_commit(data_load)
+                    print(
+                        f"[BLOCK] Received a block commit request from node {data_load['sender']}: {data_load}")
                 else:
                     print("error: invalid request type.")
 
@@ -137,7 +141,7 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
             self.broadcast_prepare(block)
             print("Prepare message broadcast to all nodes")
         else:
-            print("Block validation failed.")
+            print("Block validation failed......")
 
     def broadcast_prepare(self, block):
         prepare_msg = json.dumps({'type': 'prepare',
@@ -158,12 +162,14 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         if block_hash not in self.server.prepares:
             self.server.prepares[block_hash] = set()
         self.server.prepares[block_hash].add(sender)
-
+        print(f"Length is : {len(self.server.prepares[block_hash])} and {len(self.server.nodes) * 2 / 3}")
         # Check if the prepares reach 2/3 of the nodes
-        if len(self.server.prepares[block_hash]) > len(self.server.nodes) * 2 / 3:
+        if len(self.server.prepares[block_hash]) >= len(self.server.nodes) * 2 / 3:
+            print("broadcast commit")
             self.broadcast_commit(message['block'])
-        else:
-            print("Not validate")
+            del self.server.prepares[block_hash]
+        # else:
+        #     print("Not validate")
 
     def broadcast_commit(self, block):
         commit_msg = json.dumps({'type': 'commit',
@@ -180,17 +186,23 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         if block_hash not in self.server.commits:
             self.server.commits[block_hash] = set()
         self.server.commits[block_hash].add(sender)
+        if len(self.server.commits[block_hash]) >= len(self.server.nodes) * 2 / 3:
+            if self.add_block_to_chain(message['block']):
+                del self.server.commits[block_hash]
 
-        if len(self.server.commits[block_hash]) > len(self.server.nodes) * 2 / 3:
-            self.add_block_to_chain(message['block'])
-        else:
-            print("Not validate")
 
     def add_block_to_chain(self, block):
-        # Logic to add the block to the blockchain
+        # 检查是否有相同索引的区块
+        for existing_block in self.server.blockchain.blockchain:
+            if existing_block['index'] == block['index']:
+                print(f"Block with index {block['index']} already exists. Not adding to blockchain.")
+                return False
+
+        # 添加区块到区块链
         self.server.blockchain.blockchain.append(block)
         print("Block added to the blockchain.")
-        print(f"[CONSENSUS] Appended to the blockchain: {block.current_hash}")
+        print(f"[CONSENSUS] Appended to the blockchain: {block['current_hash']}")
+        return True
 
     def validate_block(self, block: dict):
         for tx in block['transactions']:
