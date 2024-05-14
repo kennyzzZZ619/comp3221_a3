@@ -15,7 +15,7 @@ index = 2
 transaction = make_transaction_request(sender, message, nonce, signature)
 # transaction = make_block_request(index)
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(('localhost', 8888))
+s.connect(('10.70.12.246', 8001))
 
 send_prefixed(s, transaction.encode())
 try:

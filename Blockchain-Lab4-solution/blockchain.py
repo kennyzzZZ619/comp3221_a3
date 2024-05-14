@@ -4,6 +4,7 @@ from enum import Enum
 import hashlib
 import json
 import re
+from typing import Union
 
 sender_valid = re.compile('^[a-fA-F0-9]{64}$')
 signature_valid = re.compile('^[a-fA-F0-9]{128}$')
@@ -45,7 +46,7 @@ def make_signature(private_key: ed25519.Ed25519PrivateKey, message: str) -> str:
     return private_key.sign(transaction_bytes(transaction)).hex()
 
 
-def validate_transaction(transaction: str) -> dict | TransactionValidationError:
+def validate_transaction(transaction: str) -> Union[dict, TransactionValidationError]:
     try:
         tx = json.loads(transaction)
     except json.JSONDecodeError:
@@ -142,12 +143,13 @@ class Blockchain():
         return hex_hash
 
     def add_transaction(self, transaction: str) -> bool:
-        if isinstance((tx := validate_transaction(transaction)), dict) and self.validate_nonce(transaction):
+        tx = validate_transaction(transaction)
+        if isinstance(tx, dict) and self.validate_nonce(transaction):
             self.pool.append(tx)
             self.confirm_transaction(tx)
             return True
         else:
-            print(validate_transaction(transaction))
+            print(tx)
         return False
 
     def update_nonce(self, sender):

@@ -149,7 +149,6 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
         if not isinstance(sender, str):
             print(f"Invalid sender type: {type(sender)}")
             return
-        print("WTF!!!!!!!")
         if block_hash not in self.server.prepares:
             self.server.prepares[block_hash] = set()
         self.server.prepares[block_hash].add(sender)
@@ -197,42 +196,87 @@ def server_threading(HOST, port, nodes):
     server.serve_forever()
 
 
-def client_threading(host_other, port_other):
+# def client_threading(host_other, port_other):
+#     try:
+#         while True:
+#             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+#                 try:
+#                     sock.connect((host_other, port_other))
+#                 except socket.error as e:
+#                     print(f"Failed to connect to {host_other}:{port_other}, error: {e}")
+#                     time.sleep(10)  # Wait before retrying to connect
+#                     continue
+#
+#                 while True:
+#                     classifier = input("Enter '0' for transaction request, '1' for block request: ")
+#                     if classifier in ['0', '1']:
+#                         break
+#                     print("Invalid input, please enter '0' or '1'.")
+#
+#                 sender, message, nonce, signature, index = generate_message()
+#
+#                 transaction = None  # Initialize to None
+#                 if classifier == '0':
+#                     transaction = make_transaction_request(sender, message, nonce, signature)
+#                 elif classifier == '1':
+#                     transaction = make_block_request(index)
+#
+#                 if transaction:
+#                     send_prefixed(sock, transaction.encode())
+#                     try:
+#                         response = recv_prefixed(sock).decode()
+#                         print("Received from other node:", response)
+#                     except Exception as e:
+#                         print(f"Error receiving data: {e}")
+#                 else:
+#                     print("No valid transaction was generated.")
+#
+#             time.sleep(10)  # Wait for 10 seconds before sending the next request
+#
+#     except Exception as e:
+#         print(f"Error in client operations: {e}")
+def client_threading(nodes):
     try:
         while True:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            for host_other, port_other in nodes:
                 try:
-                    sock.connect((host_other, port_other))
-                except socket.error as e:
-                    print(f"Failed to connect to {host_other}:{port_other}, error: {e}")
-                    time.sleep(10)  # Wait before retrying to connect
-                    continue
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                        try:
+                            sock.connect((host_other, port_other))
+                            print(f"Connected to {host_other}:{port_other}")
+                        except socket.error as e:
+                            print(f"Failed to connect to {host_other}:{port_other}, error: {e}")
+                            time.sleep(10)  # Wait before retrying to connect
+                            continue
 
-                while True:
-                    classifier = input("Enter '0' for transaction request, '1' for block request: ")
-                    if classifier in ['0', '1']:
-                        break
-                    print("Invalid input, please enter '0' or '1'.")
+                        while True:
+                            classifier = input("Enter '0' for transaction request, '1' for block request: ")
+                            if classifier in ['0', '1']:
+                                break
+                            print("Invalid input, please enter '0' or '1'.")
 
-                sender, message, nonce, signature, index = generate_message()
+                        sender, message, nonce, signature, index = generate_message()
 
-                transaction = None  # Initialize to None
-                if classifier == '0':
-                    transaction = make_transaction_request(sender, message, nonce, signature)
-                elif classifier == '1':
-                    transaction = make_block_request(index)
+                        transaction = None  # Initialize to None
+                        if classifier == '0':
+                            transaction = make_transaction_request(sender, message, nonce, signature)
+                        elif classifier == '1':
+                            transaction = make_block_request(index)
 
-                if transaction:
-                    send_prefixed(sock, transaction.encode())
-                    try:
-                        response = recv_prefixed(sock).decode()
-                        print("Received from other node:", response)
-                    except Exception as e:
-                        print(f"Error receiving data: {e}")
-                else:
-                    print("No valid transaction was generated.")
+                        if transaction:
+                            send_prefixed(sock, transaction.encode())
+                            try:
+                                response = recv_prefixed(sock).decode()
+                                print("Received from other node:", response)
+                            except Exception as e:
+                                print(f"Error receiving data: {e}")
+                        else:
+                            print("No valid transaction was generated.")
 
-            time.sleep(10)  # Wait for 10 seconds before sending the next request
+                except Exception as e:
+                    print(f"Error in client operations: {e}")
+
+                time.sleep(10)  # Wait for 10 seconds before sending the next request
 
     except Exception as e:
         print(f"Error in client operations: {e}")
@@ -255,7 +299,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     port: int = args.port
     node_list: str = args.node_list
-    HOST = 'localhost'  # localhost
+    HOST = '10.16.85.229'  # localhost
     host_other = 'localhost'  # change----->'local host'
     port_other = 8000  # change--------->8000
     nodes = []
@@ -279,11 +323,11 @@ if __name__ == '__main__':
     try:
         server_thread = threading.Thread(target=server_threading, args=(HOST, port, nodes))
         server_thread.start()
-        client_thread = threading.Thread(target=client_threading, args=(host_other, port_other))
-        client_thread.start()
+        #client_thread = threading.Thread(target=client_threading, args=(nodes,))
+        #client_thread.start()
         print(f"Server started on {HOST}:{port}. Press Ctrl+C to stop.")
         server_thread.join()
-        client_thread.join()
+        #client_thread.join()
     except KeyboardInterrupt:
         print("\nServer shutting down...")
     except Exception as e:
